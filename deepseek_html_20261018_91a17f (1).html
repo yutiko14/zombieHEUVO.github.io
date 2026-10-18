@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Зомби. Нахуй. Выживание.</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0f0b;overflow:hidden;font-family:system-ui,Arial,sans-serif}
+  #wrap{position:fixed;inset:0;display:grid;place-items:center}
+  canvas{background:#121a12;border:2px solid #2a3a2a;border-radius:8px;cursor:crosshair;max-width:100%;max-height:100%}
+  
+  #hud{position:fixed;top:10px;left:12px;color:#cfe8cf;font-size:14px;text-shadow:0 1px 2px #000;pointer-events:none;line-height:1.5;display:none}
+  #hud .bonus{color:#ff6b6b;font-weight:bold;display:none;}
+  #hud .difficulty{color:#ffaa00;font-weight:bold;display:none;}
+
+  #menu, #gameover {
+    position:fixed; inset:0; 
+    display:flex; flex-direction:column; 
+    align-items:center; justify-content:center; 
+    background: #0b0f0b; color:#e8ffe8; 
+    z-index: 10;
+  }
+  #menu.hidden, #gameover.hidden { display: none; }
+
+  #menu h1 {
+    font-size: 48px; margin: 0 0 20px; 
+    text-align: center; line-height: 1.1;
+    color: #7cff7c; text-shadow: 0 0 20px #3a7a3a;
+  }
+  #menu p { opacity: 0.7; margin-bottom: 30px; font-size: 18px; }
+  
+  .btn {
+    padding: 15px 40px; border: 2px solid #3d5a3d; 
+    background: #1c2a1c; color: #dfffdf; 
+    border-radius: 8px; font-size: 20px; 
+    cursor: pointer; transition: 0.2s;
+    font-weight: bold; text-transform: uppercase;
+  }
+  .btn:hover { background: #243824; border-color: #7cff7c; box-shadow: 0 0 15px #7cff7c; }
+
+  .tg-link {
+    position: fixed; bottom: 20px; left: 20px;
+    color: #6b8a6b; text-decoration: none; 
+    font-size: 16px; font-family: monospace;
+    transition: 0.2s;
+  }
+  .tg-link:hover { color: #7cff7c; text-shadow: 0 0 10px #7cff7c; }
+
+  #levelup-msg {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 32px; color: #ff5c5c; font-weight: bold;
+    text-shadow: 0 0 20px #ff0000;
+    pointer-events: none; opacity: 0;
+    transition: opacity 0.5s;
+    z-index: 5; text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>Зомби.<br>Нахуй.<br>Выживание.</h1>
+  <p>Убей их всех. Или умри.</p>
+  <button class="btn" id="playBtn">Играть</button>
+</div>
+
+<div id="gameover" class="hidden">
+  <h1 style="font-size: 40px; color: #ff5c5c; margin-bottom: 10px;">Ты съеден 🧟</h1>
+  <p style="font-size: 20px; margin: 5px 0;">Убито зомби: <b id="finalKills">0</b></p>
+  <p style="font-size: 20px; margin: 5px 0;">Волна: <b id="finalWave">1</b></p>
+  <button class="btn" id="restartBtn" style="margin-top: 30px;">Заново</button>
+</div>
+
+<a href="https://t.me/yutiko" target="_blank" class="tg-link">t.me/yutiko</a>
+
+<div id="wrap"><canvas id="game" width="960" height="600"></canvas></div>
+
+<div id="hud">
+  <div>❤ <span id="hp">100</span></div>
+  <div>💀 Убито: <span id="kills">0</span></div>
+  <div>🌊 Волна: <span id="wave">1</span></div>
+  <div>🎯 До бонуса: <span id="nextBonus">20</span></div>
+  <div>⚡ Сложность: <span id="difficulty">1</span></div>
+  <div class="bonus" id="bonusHud">🔥 РАЖ: <span id="bonusTimer">0</span>с</div>
+  <div class="difficulty" id="diffHud" style="color:#ffaa00; display:none;">⚠️ СЛОЖНОСТЬ ПОВЫШЕНА!</div>
+</div>
+
+<div id="levelup-msg">СЛОЖНОСТЬ ПОВЫШЕНА!</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const ui = {
+    hp: document.getElementById('hp'),
+    kills: document.getElementById('kills'),
+    wave: document.getElementById('wave'),
+    nextBonus: document.getElementById('nextBonus'),
+    bonusHud: document.getElementById('bonusHud'),
+    bonusTimer: document.getElementById('bonusTimer'),
+    difficulty: document.getElementById('difficulty'),
+    diffHud: document.getElementById('diffHud'),
+    menu: document.getElementById('menu'),
+    gameover: document.getElementById('gameover'),
+    hud: document.getElementById('hud'),
+    playBtn: document.getElementById('playBtn'),
+    restartBtn: document.getElementById('restartBtn'),
+    finalKills: document.getElementById('finalKills'),
+    finalWave: document.getElementById('finalWave'),
+    levelupMsg: document.getElementById('levelup-msg'),
+  };
+
+  // --- AUDIO ENGINE ---
+  const AudioEngine = {
+    ctx: null,
+    masterGain: null,
+    musicGain: null,
+    isInitialized: false,
+    musicInterval: null,
+
+    init() {
+      if (this.isInitialized) return;
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AudioContext();
+      
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = 0.5;
+      this.masterGain.connect(this.ctx.destination);
+
+      this.musicGain = this.ctx.createGain();
+      this.musicGain.gain.value = 0.15; // Громкость музыки
+      this.musicGain.connect(this.masterGain);
+
+      this.isInitialized = true;
+    },
+
+    playShoot() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(600, t);
+      osc.frequency.exponentialRampToValueAtTime(100, t + 0.1);
+      gain.gain.setValueAtTime(0.15, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    },
+
+    playHit() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(150, t);
+      osc.frequency.exponentialRampToValueAtTime(50, t + 0.1);
+      gain.gain.setValueAtTime(0.3, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    },
+
+    playExplosion() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      const bufferSize = this.ctx.sampleRate * 0.5;
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buffer;
+      
+      const noiseFilter = this.ctx.createBiquadFilter();
+      noiseFilter.type = 'lowpass';
+      noiseFilter.frequency.setValueAtTime(1000, t);
+      noiseFilter.frequency.exponentialRampToValueAtTime(100, t + 0.4);
+      
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.4, t);
+      noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 0.4);
+      
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(this.masterGain);
+      
+      const osc = this.ctx.createOscillator();
+      const oscGain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(80, t);
+      osc.frequency.exponentialRampToValueAtTime(20, t + 0.5);
+      oscGain.gain.setValueAtTime(0.5, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.01, t + 0.5);
+      osc.connect(oscGain);
+      oscGain.connect(this.masterGain);
+      
+      noise.start(t);
+      osc.start(t);
+      osc.stop(t + 0.5);
+    },
+
+    playZombieDeath() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(100, t);
+      osc.frequency.exponentialRampToValueAtTime(30, t + 0.15);
+      gain.gain.setValueAtTime(0.1, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    },
+
+    playFrenzy() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, t);
+      osc.frequency.linearRampToValueAtTime(800, t + 0.3);
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.3);
+    },
+
+    playLevelUp() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      [400, 600, 800].forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(f, t + i * 0.1);
+        gain.gain.setValueAtTime(0.15, t + i * 0.1);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + i * 0.1 + 0.1);
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+        osc.start(t + i * 0.1);
+        osc.stop(t + i * 0.1 + 0.1);
+      });
+    },
+
+    playMedkit() {
+      if (!this.isInitialized) return;
+      const t = this.ctx.currentTime;
+      [500, 700, 1000].forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(f, t + i * 0.08);
+        gain.gain.setValueAtTime(0.2, t + i * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + i * 0.08 + 0.15);
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+        osc.start(t + i * 0.08);
+        osc.stop(t + i * 0.08 + 0.15);
+      });
+    },
+
+    startMusic() {
+      if (!this.isInitialized) return;
+      this.stopMusic();
+      // Мрачный пульсирующий бас
+      this.musicInterval = setInterval(() => {
+        if (!this.ctx || this.ctx.state === 'suspended') return;
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        
+        osc.type = 'triangle';
+        // Чередуем ноты для драматизма
+        const notes = [55, 55, 65, 55]; // A1, A1, C2, A1
+        const note = notes[Math.floor(t * 2) % notes.length];
+        osc.frequency.setValueAtTime(note, t);
+        
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.2, t + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.4);
+        
+        osc.connect(gain);
+        gain.connect(this.musicGain);
+        
+        osc.start(t);
+        osc.stop(t + 0.4);
+      }, 500);
+    },
+
+    stopMusic() {
+      if (this.musicInterval) {
+        clearInterval(this.musicInterval);
+        this.musicInterval = null;
+      }
+    },
+
+    resume() {
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume();
+      }
+    }
+  };
+
+  // --- GAME STATE ---
+  const state = {
+    running: false,
+    over: false,
+    hp: 100,
+    maxHp: 100,
+    kills: 0,
+    wave: 1,
+    difficulty: 1,
+    waveTimer: 0,
+    spawnTimer: 0,
+    itemTimer: 5,
+    medkitTimer: 10, // Таймер для аптечек
+    player: { x: W/2, y: H/2, r: 14, speed: 220 },
+    zombies: [],
+    bullets: [],
+    particles: [],
+    items: [],    // бомбы
+    medkits: [],  // аптечки
+    keys: {},
+    mouse: { x: W/2, y: H/2, down: false },
+    lastShot: 0,
+    shootCooldown: 140,
+    baseCooldown: 140,
+    bonusCooldown: 70,
+    frenzyTime: 0,
+    frenzyActive: false,
+    screenFlash: 0,
+    cameraShake: 0,
+    t: 0,
+    nextBonusKill: 20,
+    nextDiffKill: 50,
+    lastHitSoundTime: 0,
+  };
+
+  function startGame() {
+    AudioEngine.init();
+    AudioEngine.resume();
+    AudioEngine.startMusic();
+
+    state.running = true;
+    state.over = false;
+    state.hp = state.maxHp;
+    state.kills = 0;
+    state.wave = 1;
+    state.difficulty = 1;
+    state.waveTimer = 0;
+    state.spawnTimer = 0;
+    state.itemTimer = 5;
+    state.medkitTimer = 10;
+    state.zombies = [];
+    state.bullets = [];
+    state.particles = [];
+    state.items = [];
+    state.medkits = [];
+    state.player.x = W/2;
+    state.player.y = H/2;
+    state.lastShot = 0;
+    state.shootCooldown = state.baseCooldown;
+    state.frenzyTime = 0;
+    state.frenzyActive = false;
+    state.screenFlash = 0;
+    state.cameraShake = 0;
+    state.nextBonusKill = 20;
+    state.nextDiffKill = 50;
+    state.lastHitSoundTime = 0;
+
+    ui.menu.classList.add('hidden');
+    ui.gameover.classList.add('hidden');
+    ui.hud.style.display = 'block';
+    ui.bonusHud.style.display = 'none';
+    ui.diffHud.style.display = 'none';
+    ui.levelupMsg.style.opacity = 0;
+    
+    syncHud();
+  }
+
+  function syncHud() {
+    ui.hp.textContent = Math.max(0, Math.round(state.hp));
+    ui.kills.textContent = state.kills;
+    ui.wave.textContent = state.wave;
+    ui.difficulty.textContent = state.difficulty;
+    ui.nextBonus.textContent = Math.max(0, state.nextBonusKill - state.kills);
+    
+    if (state.frenzyActive) {
+      ui.bonusHud.style.display = 'block';
+      ui.bonusTimer.textContent = Math.ceil(state.frenzyTime);
+    } else {
+      ui.bonusHud.style.display = 'none';
+    }
+  }
+
+  // --- Input ---
+  addEventListener('keydown', e => {
+    state.keys[e.key.toLowerCase()] = true;
+    if (e.key.toLowerCase() === 'r' && state.running) startGame();
+    if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) e.preventDefault();
+  });
+  addEventListener('keyup', e => { state.keys[e.key.toLowerCase()] = false; });
+
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    state.mouse.x = (e.clientX - r.left) * (W / r.width);
+    state.mouse.y = (e.clientY - r.top) * (H / r.height);
+  });
+  canvas.addEventListener('mousedown', e => { if (e.button === 0) state.mouse.down = true; });
+  addEventListener('mouseup', e => { if (e.button === 0) state.mouse.down = false; });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  ui.playBtn.addEventListener('click', startGame);
+  ui.restartBtn.addEventListener('click', startGame);
+
+  // --- Spawn ---
+  function spawnZombie() {
+    const side = Math.floor(Math.random() * 4);
+    let x, y;
+    if (side === 0) { x = Math.random() * W; y = -30; }
+    else if (side === 1) { x = W + 30; y = Math.random() * H; }
+    else if (side === 2) { x = Math.random() * W; y = H + 30; }
+    else { x = -30; y = Math.random() * H; }
+
+    const diff = state.difficulty;
+    const hp = 30 + state.wave * 12 + diff * 15;
+    state.zombies.push({
+      x, y,
+      r: 12 + Math.min(6, state.wave * 0.4) + diff * 0.5,
+      hp, maxHp: hp,
+      speed: 45 + state.wave * 6 + Math.random() * 20 + diff * 8,
+      dmg: 7 + state.wave * 1.0 + diff * 1.5,
+      hitFlash: 0,
+    });
+  }
+
+  function spawnItem() {
+    let x, y, dist;
+    do {
+      x = 50 + Math.random() * (W - 100);
+      y = 50 + Math.random() * (H - 100);
+      dist = Math.hypot(x - state.player.x, y - state.player.y);
+    } while (dist < 100);
+    state.items.push({ x, y, r: 12, pulse: 0 });
+  }
+
+  function spawnMedkit() {
+    let x, y, dist;
+    do {
+      x = 50 + Math.random() * (W - 100);
+      y = 50 + Math.random() * (H - 100);
+      dist = Math.hypot(x - state.player.x, y - state.player.y);
+    } while (dist < 80);
+    state.medkits.push({ x, y, r: 12, pulse: 0 });
+  }
+
+  function explodeItem(item) {
+    AudioEngine.playExplosion();
+    const radius = 100;
+    const damageRadius = 150;
+    const damage = 100 + state.difficulty * 50;
+
+    for (let i = state.zombies.length - 1; i >= 0; i--) {
+      const z = state.zombies[i];
+      const d = Math.hypot(z.x - item.x, z.y - item.y);
+      if (d < radius) {
+        state.kills++;
+        state.zombies.splice(i, 1);
+        for (let k = 0; k < 10; k++) {
+          state.particles.push({
+            x: z.x, y: z.y,
+            vx: (Math.random()-0.5)*300,
+            vy: (Math.random()-0.5)*300,
+            life: 0.6, maxLife: 0.6,
+            color: '#ffaa00'
+          });
+        }
+        checkProgress();
+      } else if (d < damageRadius) {
+        z.hp -= damage;
+        z.hitFlash = 1;
+        if (z.hp <= 0) {
+          state.kills++;
+          state.zombies.splice(i, 1);
+          for (let k = 0; k < 5; k++) {
+            state.particles.push({
+              x: z.x, y: z.y,
+              vx: (Math.random()-0.5)*200,
+              vy: (Math.random()-0.5)*200,
+              life: 0.5, maxLife: 0.5,
+              color: '#ff6b6b'
+            });
+          }
+          checkProgress();
+        }
+      }
+    }
+
+    for (let k = 0; k < 30; k++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 100 + Math.random() * 200;
+      state.particles.push({
+        x: item.x, y: item.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.8, maxLife: 0.8,
+        color: Math.random() > 0.5 ? '#ffaa00' : '#ff5c5c'
+      });
+    }
+
+    state.screenFlash = Math.max(state.screenFlash, 0.8);
+    state.cameraShake = Math.max(state.cameraShake, 2);
+    syncHud();
+  }
+
+  function checkProgress() {
+    if (state.kills >= state.nextBonusKill) activateFrenzy();
+    if (state.kills >= state.nextDiffKill) increaseDifficulty();
+  }
+
+  function shoot() {
+    const now = performance.now();
+    if (now - state.lastShot < state.shootCooldown) return;
+    state.lastShot = now;
+
+    AudioEngine.playShoot();
+
+    const p = state.player;
+    const dx = state.mouse.x - p.x;
+    const dy = state.mouse.y - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const speed = 720;
+
+    state.bullets.push({
+      x: p.x + dx/len * (p.r + 4),
+      y: p.y + dy/len * (p.r + 4),
+      vx: dx/len * speed,
+      vy: dy/len * speed,
+      r: 3,
+      life: 1.2,
+    });
+  }
+
+  function update(dt) {
+    if (!state.running || state.over) return;
+    state.t += dt;
+
+    if (state.screenFlash > 0) state.screenFlash -= dt * 2;
+    if (state.cameraShake > 0) state.cameraShake -= dt * 3;
+
+    if (state.frenzyActive) {
+      state.frenzyTime -= dt;
+      if (state.frenzyTime <= 0) {
+        state.frenzyActive = false;
+        state.frenzyTime = 0;
+        state.shootCooldown = state.baseCooldown;
+      }
+    }
+
+    const p = state.player;
+    let mx = 0, my = 0;
+    if (state.keys['w'] || state.keys['arrowup']) my -= 1;
+    if (state.keys['s'] || state.keys['arrowdown']) my += 1;
+    if (state.keys['a'] || state.keys['arrowleft']) mx -= 1;
+    if (state.keys['d'] || state.keys['arrowright']) mx += 1;
+    const mlen = Math.hypot(mx, my);
+    if (mlen > 0) {
+      p.x += (mx/mlen) * p.speed * dt;
+      p.y += (my/mlen) * p.speed * dt;
+    }
+    p.x = Math.max(p.r, Math.min(W - p.r, p.x));
+    p.y = Math.max(p.r, Math.min(H - p.r, p.y));
+
+    // Бомбы
+    for (let i = state.items.length - 1; i >= 0; i--) {
+      const item = state.items[i];
+      item.pulse += dt * 5;
+      if (Math.hypot(p.x - item.x, p.y - item.y) < p.r + item.r) {
+        explodeItem(item);
+        state.items.splice(i, 1);
+      }
+    }
+
+    // Аптечки
+    for (let i = state.medkits.length - 1; i >= 0; i--) {
+      const mk = state.medkits[i];
+      mk.pulse += dt * 5;
+      if (Math.hypot(p.x - mk.x, p.y - mk.y) < p.r + mk.r) {
+        state.hp = Math.min(state.maxHp, state.hp + 30);
+        AudioEngine.playMedkit();
+        // Эффект лечения
+        for (let k = 0; k < 15; k++) {
+          state.particles.push({
+            x: p.x, y: p.y,
+            vx: (Math.random()-0.5)*200,
+            vy: (Math.random()-0.5)*200,
+            life: 0.6, maxLife: 0.6,
+            color: '#4ade80'
+          });
+        }
+        state.medkits.splice(i, 1);
+        syncHud();
+      }
+    }
+
+    if (state.mouse.down) shoot();
+
+    for (let i = state.bullets.length - 1; i >= 0; i--) {
+      const b = state.bullets[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.life -= dt;
+      if (b.life <= 0 || b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) {
+        state.bullets.splice(i, 1);
+      }
+    }
+
+    for (let i = state.zombies.length - 1; i >= 0; i--) {
+      const z = state.zombies[i];
+      const dx = p.x - z.x, dy = p.y - z.y;
+      const d = Math.hypot(dx, dy) || 1;
+      z.x += (dx/d) * z.speed * dt;
+      z.y += (dy/d) * z.speed * dt;
+      z.hitFlash = Math.max(0, z.hitFlash - dt * 4);
+
+      if (d < z.r + p.r) {
+        state.hp -= z.dmg * dt * 0.9;
+        const now = performance.now();
+        if (now - state.lastHitSoundTime > 500) {
+          AudioEngine.playHit();
+          state.lastHitSoundTime = now;
+        }
+        if (state.hp <= 0) { state.hp = 0; gameOver(); }
+      }
+
+      for (let j = state.bullets.length - 1; j >= 0; j--) {
+        const b = state.bullets[j];
+        if (Math.hypot(b.x - z.x, b.y - z.y) < z.r + b.r) {
+          z.hp -= 18;
+          z.hitFlash = 1;
+          state.bullets.splice(j, 1);
+          for (let k = 0; k < 5; k++) {
+            state.particles.push({
+              x: z.x, y: z.y,
+              vx: (Math.random()-0.5)*160,
+              vy: (Math.random()-0.5)*160,
+              life: 0.4, maxLife: 0.4,
+              color: state.frenzyActive ? '#ff6b6b' : '#7cff7c'
+            });
+          }
+          if (z.hp <= 0) {
+            state.kills++;
+            state.zombies.splice(i, 1);
+            AudioEngine.playZombieDeath();
+            checkProgress();
+            syncHud();
+          }
+          break;
+        }
+      }
+    }
+
+    for (let i = state.particles.length - 1; i >= 0; i--) {
+      const pt = state.particles[i];
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      pt.life -= dt;
+      if (pt.life <= 0) state.particles.splice(i, 1);
+    }
+
+    state.waveTimer += dt;
+    state.spawnTimer -= dt;
+    const spawnInterval = Math.max(0.15, 1.1 - state.wave * 0.06 - state.difficulty * 0.05);
+    if (state.spawnTimer <= 0) {
+      spawnZombie();
+      if (state.difficulty > 2 && Math.random() < 0.4) spawnZombie();
+      if (state.difficulty > 4 && Math.random() < 0.3) spawnZombie();
+      state.spawnTimer = spawnInterval;
+    }
+
+    if (state.waveTimer > 18) {
+      state.waveTimer = 0;
+      state.wave++;
+      state.hp = Math.min(state.maxHp, state.hp + 12);
+      syncHud();
+    }
+
+    // Спавн бомб
+    state.itemTimer -= dt;
+    if (state.itemTimer <= 0 && state.items.length < 4) {
+      spawnItem();
+      state.itemTimer = 6 + Math.random() * 6;
+    }
+
+    // Спавн аптечек
+    state.medkitTimer -= dt;
+    if (state.medkitTimer <= 0 && state.medkits.length < 3) {
+      spawnMedkit();
+      state.medkitTimer = 15 + Math.random() * 10;
+    }
+
+    syncHud();
+  }
+
+  function activateFrenzy() {
+    AudioEngine.playFrenzy();
+    state.frenzyActive = true;
+    state.frenzyTime = 15;
+    state.shootCooldown = state.bonusCooldown;
+    state.nextBonusKill += 20;
+    state.screenFlash = 1;
+    state.cameraShake = 1.5;
+  }
+
+  function increaseDifficulty() {
+    AudioEngine.playLevelUp();
+    state.difficulty++;
+    state.nextDiffKill += 50;
+    
+    ui.levelupMsg.style.opacity = 1;
+    setTimeout(() => { if (state.difficulty > 1) ui.levelupMsg.style.opacity = 0; }, 2000);
+    ui.diffHud.style.display = 'block';
+    setTimeout(() => { ui.diffHud.style.display = 'none'; }, 3000);
+
+    state.screenFlash = Math.max(state.screenFlash, 0.6);
+    state.cameraShake = Math.max(state.cameraShake, 2.5);
+  }
+
+  function gameOver() {
+    state.over = true;
+    state.running = false;
+    AudioEngine.stopMusic();
+    
+    ui.finalKills.textContent = state.kills;
+    ui.finalWave.textContent = state.wave;
+    ui.gameover.classList.remove('hidden');
+    ui.hud.style.display = 'none';
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    ctx.save();
+    if (state.cameraShake > 0) {
+      ctx.translate((Math.random()-0.5) * state.cameraShake * 10, (Math.random()-0.5) * state.cameraShake * 10);
+    }
+
+    ctx.strokeStyle = 'rgba(80,140,80,.10)';
+    ctx.lineWidth = 1;
+    const g = 40;
+    for (let x = 0; x < W; x += g) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0; y < H; y += g) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+    for (const pt of state.particles) {
+      const a = pt.life / pt.maxLife;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = pt.color;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 3, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Бомбы
+    for (const item of state.items) {
+      const pulse = 1 + Math.sin(item.pulse) * 0.2;
+      ctx.fillStyle = '#ffcc00';
+      ctx.beginPath(); ctx.arc(item.x, item.y, item.r * pulse, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#ff5c5c';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#ff5c5c';
+      ctx.font = 'bold 14px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('!', item.x, item.y);
+    }
+
+    // Аптечки
+    for (const mk of state.medkits) {
+      const pulse = 1 + Math.sin(mk.pulse) * 0.15;
+      // Белый квадрат
+      ctx.fillStyle = '#f0f0f0';
+      ctx.fillRect(mk.x - mk.r * pulse, mk.y - mk.r * pulse, mk.r * 2 * pulse, mk.r * 2 * pulse);
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(mk.x - mk.r * pulse, mk.y - mk.r * pulse, mk.r * 2 * pulse, mk.r * 2 * pulse);
+      // Красный крест
+      ctx.fillStyle = '#ff3333';
+      ctx.fillRect(mk.x - 2, mk.y - 6, 4, 12);
+      ctx.fillRect(mk.x - 6, mk.y - 2, 12, 4);
+    }
+
+    for (const b of state.bullets) {
+      ctx.fillStyle = state.frenzyActive ? '#ffaa00' : '#ffe066';
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+    }
+
+    for (const z of state.zombies) {
+      ctx.fillStyle = z.hitFlash > 0 ? '#ffffff' : '#5cbf5c';
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#2a5a2a';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const w = z.r * 2;
+      const hpFrac = z.hp / z.maxHp;
+      ctx.fillStyle = '#3a0f0f';
+      ctx.fillRect(z.x - z.r, z.y - z.r - 8, w, 4);
+      ctx.fillStyle = '#ff5c5c';
+      ctx.fillRect(z.x - z.r, z.y - z.r - 8, w * hpFrac, 4);
+      ctx.fillStyle = '#0b0f0b';
+      ctx.beginPath(); ctx.arc(z.x - z.r*0.35, z.y - z.r*0.15, 2.2, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(z.x + z.r*0.35, z.y - z.r*0.15, 2.2, 0, Math.PI*2); ctx.fill();
+    }
+
+    const p = state.player;
+    if (state.frenzyActive) {
+      ctx.shadowColor = '#ff3333';
+      ctx.shadowBlur = 20;
+    }
+    ctx.fillStyle = state.frenzyActive ? '#ff4d4d' : '#4aa8ff';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+    
+    ctx.strokeStyle = state.frenzyActive ? '#aa0000' : '#1b5a99';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const dx = state.mouse.x - p.x, dy = state.mouse.y - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    ctx.strokeStyle = state.frenzyActive ? '#ffcc00' : '#bfe3ff';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + dx/len * (p.r + 10), p.y + dy/len * (p.r + 10));
+    ctx.stroke();
+
+    ctx.strokeStyle = state.frenzyActive ? 'rgba(255,100,100,.8)' : 'rgba(255,255,255,.8)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(state.mouse.x, state.mouse.y, 7, 0, Math.PI*2);
+    ctx.moveTo(state.mouse.x - 12, state.mouse.y);
+    ctx.lineTo(state.mouse.x + 12, state.mouse.y);
+    ctx.moveTo(state.mouse.x, state.mouse.y - 12);
+    ctx.lineTo(state.mouse.x, state.mouse.y + 12);
+    ctx.stroke();
+
+    const barW = 220, barH = 14;
+    const bx = 16, by = H - 30;
+    ctx.fillStyle = 'rgba(0,0,0,.5)';
+    ctx.fillRect(bx, by, barW, barH);
+    ctx.fillStyle = state.hp > 30 ? '#4ade80' : '#f87171';
+    ctx.fillRect(bx, by, barW * (state.hp / state.maxHp), barH);
+    ctx.strokeStyle = '#2a3a2a';
+    ctx.strokeRect(bx, by, barW, barH);
+
+    ctx.restore();
+
+    if (state.screenFlash > 0) {
+      ctx.fillStyle = `rgba(255, 50, 50, ${state.screenFlash * 0.4})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  draw();
+})();
+</script>
+</body>
+</html>
